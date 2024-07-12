@@ -37,9 +37,9 @@ If a database has **NOT** been create, it will open a popup:
 
 This is a pop-up for the ZXY dimension, the program will read the metadata of the first tif image to get it and assume that ALL other images have the same dimension (*TODO, security*).
 
-The best plane selector and Z projection are exclusive, you can only select one. The best plane here is defined as the **largest continuous** area detected after thresholding in the Z-plane. The crop will be just in this area. These options are compute-intensive. The `channel for the selection` indicates with channel to use to perform such selection. The main purpose of these options is to select the center plane of the nucleus, but it can also be used for other purposes.
+The `best plane selector` and `Z projection` are exclusive, you can only select one. The best plane here is defined as the **largest continuous** area detected after thresholding in the Z-plane. The crop will be just in this area. These options are compute-intensive. The `channel for the selection` indicates with channel to use to perform such selection. The main purpose of these options is to select the center plane of the nucleus, but it can also be used for other purposes.
 
-If such an option is not good, you can apply the Z-projection, 3 types, Max, Mean, and Sum. It can be combined with `crop to selection` to focus only on the nucleus, for example, while ignoring the best plane. The Z-projection alone is extremely quick, limited by the read time of the drive where the data are located.
+If such an option is not good, you can apply the Z-projection. 3 types are available: Max, Mean, and Sum. It can be combined with `crop to selection` to focus only on the nucleus, for example, while ignoring the best plane. The Z-projection alone is extremely quick, limited by the read time of the drive where the data are located.
 
 The database will be generated on the channel designed in `Channel for database`.
 
