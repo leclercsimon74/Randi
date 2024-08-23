@@ -7,6 +7,31 @@ Created on Mon Jun 24 11:13:17 2024
 Fusion of the classifier randomizer and of database maker, with option!
 
 
+TODO:
+    - open recent file log              DONE
+        - reorder them as well          DONE
+    - about window
+    - more help part                    partially DONE
+    - Different images shape scenario   DONE
+    - Different input image format
+    - Different output format
+    
+    - Add a training and prediction capacity - CPU
+        - Classical network
+        - prebuilt network
+        
+    - Make a database from a single folder (containing at least one image)
+
+BUG:
+    - If no database created/open if selected classifier->new
+        self.df = self.df.sample(frac=1).reset_index(drop=True) #shuffle
+        AttributeError: 'NoneType' object has no attribute 'sample')
+    
+    - if closing the database creation window
+        self.database = pd.read_csv(self.database_log['Name']+os.sep+'database.csv')
+        TypeError: 'NoneType' object is not subscriptable
+    
+
 """
 
 #classifier import
@@ -15,12 +40,16 @@ import os #file and folder managment
 import sys #window creation
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QMainWindow, QLabel, QDialog, QLineEdit, QPushButton, QMessageBox, QComboBox, QCheckBox, QProgressBar
-from PyQt5.QtWidgets import QDialogButtonBox, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout, QSpinBox, QWidget
-from PyQt5.QtWidgets import QAction, QStatusBar, QApplication, QTableWidget, QTableWidgetItem
+from PyQt5.QtWidgets import (QMainWindow, QLabel, QDialog, QLineEdit, QPushButton,
+                             QMessageBox, QComboBox, QCheckBox, QProgressBar,
+                             QDialogButtonBox, QGroupBox, QVBoxLayout, QHBoxLayout,
+                             QFormLayout, QSpinBox, QWidget, QAction, QStatusBar,
+                             QApplication, QTableWidget, QTableWidgetItem)
 from PyQt5.QtGui import QPixmap, QFont, QIntValidator, QImage
 import numpy as np #image manipulation
 import random #randomize image orientation and display
+from functools import partial
+from shutil import rmtree
 
 #database maker import
 import tifffile #image opening and saving
@@ -31,6 +60,38 @@ import json
 #optionnal
 import matplotlib.pyplot as plt #testing purpose, may remove
 
+DEBUG = True
+
+
+randi_json = {}
+randi_json_path = os.getcwd()+os.sep+"Randi"+os.sep+'randi.json'
+
+def read_jsn():
+    global randi_json, randi_json_path
+    if os.path.isfile(randi_json_path): #check that we have the file
+        with open(randi_json_path, 'r', encoding='utf-8') as f:
+            randi_json = json.load(f)
+    else: #need to put the minimum amount of information in the dictionnary, even if blank
+        randi_json['open recent'] = []
+    return randi_json
+
+
+def save_jsn(randi_json):
+    global randi_json_path
+    with open(randi_json_path, 'w', encoding='utf-8') as f:
+        json.dump(randi_json, f, ensure_ascii=False, indent=4)
+
+def add_recent_path_to_json(new_path):
+    randi_json = read_jsn()
+    open_recent_list = randi_json['open recent']
+    if new_path in open_recent_list: #remove the old reference, so the new one can be added to the top!
+        del open_recent_list[open_recent_list.index(new_path)]
+    open_recent_list.insert(0, new_path) #add on top of the list
+    #remove last item if too long
+    if len(open_recent_list) >= 5:
+        open_recent_list = open_recent_list[:5]
+    randi_json['open recent'] = open_recent_list
+    save_jsn(randi_json)
 
 
 class MainWindow(QMainWindow):
@@ -39,7 +100,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Randi")
         self.resize(600, 400)
         self.app_path = os.getcwd()
-        #TODO read a log about recent open file
+        self.randi_json = read_jsn()
         self.database = None
         self.isdatabase = False
         self.database_log = None
@@ -56,7 +117,8 @@ class MainWindow(QMainWindow):
         # Database menu
         fileMenu = menuBar.addMenu("&Database")
         fileMenu.addAction(self.new_databaseAction)
-        fileMenu.addAction(self.open_r_databaseAction)
+        # self.openRecentMenu = fileMenu.addAction(self.open_r_databaseAction)
+        self.openRecentMenu = fileMenu.addMenu("Open Recent")
         fileMenu.addSeparator()
         fileMenu.addAction(self.exitAction)
         # Classifier menu
@@ -115,13 +177,17 @@ class MainWindow(QMainWindow):
         self.new_databaseAction.setStatusTip("Create a new database or load an existing database")
 
         self.open_r_databaseAction = QAction("&Open Recent", self)
+        self.open_r_databaseAction.setStatusTip("Open a list of the 5 most recent databases")
 
         self.new_classiAction = QAction("&New", self)
+        self.new_classiAction.setStatusTip("Start a new human driven classification")
         
         self.exitAction = QAction("&Exit", self)
+        self.exitAction.setStatusTip("Exit the program. With confirmation")
         self.helpContentAction = QAction("&Help Content", self)
+        self.helpContentAction.setStatusTip("Need to be build")
         self.aboutAction = QAction("&About", self)
-        
+        self.aboutAction.setStatusTip("Need to be build")
         
     def _createStatusBar(self):
         self.statusbar = QStatusBar()
@@ -131,41 +197,44 @@ class MainWindow(QMainWindow):
     def _connectActions(self):
         # Connect Database actions
         self.new_databaseAction.triggered.connect(self.Database)
-        self.open_r_databaseAction.triggered.connect(self.openRecentData)
+        self.open_r_databaseAction.triggered.connect(self.openRecentFile)
         self.exitAction.triggered.connect(self.close)
         # Connect Classifier actions
         self.new_classiAction.triggered.connect(self.Classifier)
         # Connect Help actions
         self.helpContentAction.triggered.connect(self.helpContent)
         self.aboutAction.triggered.connect(self.about)
+        self.openRecentMenu.aboutToShow.connect(self.populateOpenRecent)
 
 
     def Database(self):
         #create a classical 'Select Folder' window
         folderpath = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder')
         if folderpath != '': #detect if cancel
-            os.chdir(folderpath) #change the working directory
+            self._openDatabase(folderpath)
+    
+    def _openDatabase(self, folderpath):
+        os.chdir(folderpath) #change the working directory
             
-            #analyse the folderpath to determine classification and/or randomization
-            dirs = os.path.basename(os.getcwd())+' - database'
-            if os.path.exists(dirs) and os.path.isfile(dirs+os.sep+'database.csv'): #database already exist, assuming classifier only
-                self.display_database_log()
-                self.database = pd.read_csv(self.database_log['Name']+os.sep+'database.csv')
-            
-            elif os.path.isfile('database.csv'):#it is the database itself!!
-                self.isdatabase = True
-                self.databaselogWidget.setText("Database loaded without original images")
-                self.database = pd.read_csv('database.csv')
-            
-            else: #does NOT exist, need to create the database first!
-                self.data_window = DatabaseWindow(dirs)
-                self.data_window.exec_()
-                self.display_database_log()
-                self.database = pd.read_csv(self.database_log['Name']+os.sep+'database.csv')
+        #analyse the folderpath to determine classification and/or randomization
+        dirs = os.path.basename(os.getcwd())+' - database'
+        if os.path.exists(dirs) and os.path.isfile(dirs+os.sep+'database.csv'): #database already exist, assuming classifier only
+            self.display_database_log()
+            self.database = pd.read_csv(self.database_log['Name']+os.sep+'database.csv')
+        
+        elif os.path.isfile('database.csv'):#it is the database itself!!
+            self.isdatabase = True
+            self.databaselogWidget.setText("Database loaded without original images")
+            self.database = pd.read_csv('database.csv')
+        
+        else: #does NOT exist, need to create the database first!
+            self.data_window = DatabaseWindow(dirs)
+            self.data_window.exec_()
+            self.display_database_log()
+            self.database = pd.read_csv(self.database_log['Name']+os.sep+'database.csv')
 
-            
-            self.configureTable()
-            
+        
+        self.configureTable()  
     
     def display_database_log(self):
         if os.path.isfile('log.json'): #check that we have the log
@@ -173,10 +242,32 @@ class MainWindow(QMainWindow):
                 self.database_log = json.load(f)
             
             self.databaselogWidget.setText("\n".join(["Current database"]+str(self.database_log).replace('\'','').replace('{','').replace('}','').split(',')))
-    
-    def openRecentData(self): #TODO
-        pass
-    
+
+    def populateOpenRecent(self):
+        # Remove the old options from the menu
+        self.openRecentMenu.clear()
+        # Dynamically create the actions
+        self.randi_json = read_jsn()
+        actions = []
+        filenames = self.randi_json['open recent']
+        for filename in filenames:
+            action = QAction(filename, self)
+            action.triggered.connect(partial(self.openRecentFile, filename))
+            actions.append(action)
+        # Add the actions to the menu
+        self.openRecentMenu.addActions(actions)
+
+    def openRecentFile(self, folderpath, arg2):
+        #check if the dir exist
+        if os.path.isdir(folderpath):
+            if DEBUG: print('Quick Load path ', folderpath)
+            if os.path.isdir(folderpath): #open if it exists!
+                add_recent_path_to_json(folderpath)
+                self._openDatabase(folderpath)
+            else:
+                print('WARNING, path does not exist', folderpath)
+                del randi_json['open recent'][randi_json['open recent'].index(folderpath)]
+            
     
     def close(self):
         reply = QMessageBox.question(self, 'Closing', 'Are you sure you want to quit?', QMessageBox.Ok | QMessageBox.Cancel)
@@ -215,13 +306,15 @@ class DatabaseWindow(QDialog):
         super(DatabaseWindow, self).__init__()
         self.dirs = dirs
         #image format
-        self.cxzy_a = False
+        self.zcxy_a = False
         self.czxy = False
         self.zxy = False
         self.cxy = False
         self.xy = False
         self.c = False
         self.z = False
+        self.all_c = False #if the channel of the image is in the same image
+        self.C_n = None #number of channel
         
         #grab all tif image and path - recursive, but assuming 1 depth
         result = [os.path.join(dp, f) for dp, dn, filenames in os.walk(os.getcwd()) for f in filenames if f.endswith('.tif')]
@@ -232,6 +325,7 @@ class DatabaseWindow(QDialog):
             self.axes = tif.series[0].axes #grab the axes! YX or ZYX
             self.shape = tif.series[0].shape #grab the axes! YX or ZYX
         
+        if DEBUG: print("Image axis and shape", self.axes, self. shape)
         
         #determine the image format
         if os.path.basename(result[0]).startswith("C1-"): #start with C, image that got splitted!
@@ -245,9 +339,13 @@ class DatabaseWindow(QDialog):
             elif self.axes == 'YX' or self.axes == 'XY': #single plane image
                 self.cxy = True
         
-        elif "C" in self.axes: #image that are not splitted - ignore for the moment, implementation can wait #TODO
-            self.cxzy_a = True
+        elif "C" in self.axes: #image that are not splitted
             self.c = True
+            if "Z" in self.axes:
+                self.z = True
+                self.zcxy_a = True
+            self.all_c = True
+            self.C_n = self.shape[self.axes.find('C')]
             img_name = [os.path.basename(f) for f in result] #generic image name!
             img_folder = [f.split(os.sep)[0] for f in result] #grab the folder
         
@@ -265,6 +363,17 @@ class DatabaseWindow(QDialog):
         self.df = pd.DataFrame()
         self.df.loc[:,"Folder"] = img_folder
         self.df.loc[:,"Name"] = img_name
+        
+        if DEBUG:
+            print('self.zcxy_a', self.zcxy_a)
+            print('self.czxy', self.czxy)
+            print('self.zxy', self.zxy)
+            print('self.cxy', self.cxy)
+            print('self.xy', self.xy)
+            print('self.c', self.c)
+            print('self.z', self.z)
+            print('self.all_c', self.all_c)
+            print('self.C_n', self.C_n)           
         
         #create the UI
         self.initUI()
@@ -337,28 +446,40 @@ class DatabaseWindow(QDialog):
         self.current_text = text
     
     def get_state(self):
-        if self.zproj_CB.checkState() == 2:
-            self.zproj_state = True
+        if self.z:
+            self.zproj_text = self.zproj.currentText() #type of projection to do
+            
+            if self.zproj_CB.checkState() == 2:
+                self.zproj_state = True
+            else:
+                self.zproj_state = False
+            
+            if self.plane_CB.checkState() == 2:
+                self.plane_state = True
+            else:
+                self.plane_state = False
         else:
-            self.zproj_state = False
+            self.zproj_state = None
+            self.plane_state = None
+            self.zproj_text = None
         
+        if self.c:
+            self.plane_C = int(self.planeC_selector.text())
+            self.selec_C = int(self.C_selector.text())
+
+        else:
+            self.plane_C = None
+            self.selec_C = None        
+
         if self.crop_CB.checkState() == 2:
             self.crop_state = True
         else:
             self.crop_state = False
 
-        if self.plane_CB.checkState() == 2:
-            self.plane_state = True
-        else:
-            self.plane_state = False
-
-        self.zproj_text = self.zproj.currentText() #type of projection to do
-        self.plane_C = int(self.planeC_selector.text())
-        self.selec_C = int(self.C_selector.text())
         self.size = int(self.imgsize_selector.text())
         
         #write the data to a file
-        self.log = {'Path':os.getcwd(),
+        self.log = {'Path':os.getcwd(), #?? FOLDER?
                     'Name':self.dirs,
                     'Best plane':self.plane_state,
                     'Crop state':self.crop_state,
@@ -368,26 +489,40 @@ class DatabaseWindow(QDialog):
                     'Channel for database':self.selec_C,
                     'Image output size':self.size}
         
+        if DEBUG: print(self.log)
+        
         with open('log.json', 'w', encoding='utf-8') as f:
             json.dump(self.log, f, ensure_ascii=False, indent=4)
+        
+        add_recent_path_to_json(self.log['Path'])
+
         
     # process the data according to the setup when form is accepted
     def process_database(self):
         self.buttonBox.hide()
         self.get_state() #this is to save and fix these value!
         valid = False
-        #check that the c channel chosen exist!, both for best plane and interest
+        
+        #Condition checking
         row = self.df.iloc[0]
-        if self.czxy or self.cxy:
+        if self.czxy or self.cxy: #split channel
             if os.path.isfile(os.path.join(row.Folder, "C"+str(self.plane_C)+"-"+row['Name'])):
                 if os.path.isfile(os.path.join(row.Folder, "C"+str(self.selec_C)+"-"+row['Name'])):
                     valid = True
-        
+                    
+        if self.all_c and self.C_n != None: #fused channel
+            if self.plane_C <= self.C_n and self.selec_C <= self.C_n:
+                valid = True
+                
+        if self.xy or self.zxy: #mono color
+            valid = True
         
         if valid:
             #create database folder
             dirs = os.path.basename(os.getcwd())+' - database'
-            os.makedirs(dirs)
+            if os.path.isdir(dirs): #delete if already present! (error during previous creation)
+                rmtree(dirs)
+            os.makedirs(dirs) #make the directory
             self.progress_bar.show()
             
             
@@ -397,27 +532,41 @@ class DatabaseWindow(QDialog):
                 if self.progress_bar.value() == 100:
                     self.progress_bar.hide()
                 
-                #split channel based
-                img = tifffile.imread(os.path.join(row.Folder, "C"+str(self.selec_C)+"-"+row['Name'])) #channel of interest
+                #open the image
+                if self.all_c: #fused img, open the full image
+                    ori_img = tifffile.imread(os.path.join(row.Folder, row['Name']))
+                    #select the correct channel
+                    img = ori_img.take(indices=self.selec_C-1, axis=self.axes.find('C'))
+                elif self.c: #split channel based
+                    img = tifffile.imread(os.path.join(row.Folder, "C"+str(self.selec_C)+"-"+row['Name'])) #channel of interest
+                elif self.xy:
+                    img = tifffile.imread(os.path.join(row.Folder, row['Name']))
                 
-                #3D!
+                #3D gestion
                 if self.z:
                     if self.zproj_state: #Z proj ONLY
                         img = self.ZProjection(img)
                         
                     if self.plane_state or self.crop_state: #best plane selector ON! Default
-                        #split channel based
-                        bestplane, bbox = self.bestPlaneSelector(tifffile.imread(os.path.join(row.Folder, "C"+str(self.plane_C)+"-"+row['Name'])))
-                    
+                        if self.all_c: #select the correct channel
+                            bestplane, bbox = self.bestPlaneSelector(ori_img.take(indices=self.selec_C-1, axis=self.axes.find('C')))
+                        elif self.c: #split channel based
+                            bestplane, bbox = self.bestPlaneSelector(tifffile.imread(os.path.join(row.Folder, "C"+str(self.plane_C)+"-"+row['Name'])))
+                        elif self.zxy:
+                            img = tifffile.imread(os.path.join(row.Folder, row['Name']))
+                            bestplane, bbox = self.bestPlaneSelector(img)
+                            
+                            
                         if self.zproj_state: #Zproj AND crop
                             img = img[bbox[0]:bbox[1], bbox[2]:bbox[3]]
                         if self.plane_state and self.crop_state: #bestplane AND crop
                             img = img[bestplane, bbox[0]:bbox[1], bbox[2]:bbox[3]]
                         elif self.plane_state: #bestplane ONLY
                             img = img[bestplane]
-                #2D, only the crop can be used!
-                elif self.crop_CB.checkState(): #TODO
-                    pass
+                
+                elif self.crop_CB.checkState(): 
+                    if self.crop_state: #2D, crop the image to the bounding box
+                        img = self.bbox_finder_2D(img)
                 
                 #resize the image
                 img_small = transform.resize(img, (self.size, self.size), preserve_range=True) #resize
@@ -443,6 +592,7 @@ class DatabaseWindow(QDialog):
             reply = QMessageBox.question(self, 'Database!', 'Database has been created', QMessageBox.Ok, QMessageBox.Ok)
             if reply == QMessageBox.Ok:
                 self.close()
+                
         else:
             QMessageBox.critical(None, "ERROR", "At least one field is invalid!")
 
@@ -474,7 +624,22 @@ class DatabaseWindow(QDialog):
         elif self.zproj_text == "Sum": img = np.sum(img, axis=0)
         return img
 
-
+    def bbox_finder_2D(self, img): #YX
+        # detect the largest object and remove everything else!
+        nucleus_b = img > filters.threshold_otsu(img)
+        nucleus_b = nd.binary_erosion(nucleus_b)
+        nucleus_b = nd.binary_dilation(nucleus_b)
+        nucleus_b = nd.binary_fill_holes(nucleus_b)
+        nucleus_l = measure.label(nucleus_b)
+        nucleus_df = measure.regionprops_table(nucleus_l, properties=('label', 'area', 'bbox'))
+        nucleus_df = pd.DataFrame(nucleus_df)
+        nucleus_df = nucleus_df.sort_values('area', ascending=False)
+        nucleus_df.reset_index(inplace=True)
+        nucleus = nucleus_df.iloc[nucleus_df['area'].idxmax()]
+        nucleus_b = np.where(nucleus_l == nucleus.label, True, False)
+        bbox = (int(nucleus['bbox-0']), int(nucleus['bbox-2']), int(nucleus['bbox-1']), int(nucleus['bbox-3']))
+        return img[bbox[0]:bbox[1], bbox[2]:bbox[3]]
+        
     def bestPlaneSelector(self, img): #ZYX
         #I estimate that most of the time, the best plane is on the largest plane of the nucleus! Time consuming though!
         #segment the nucleus
