@@ -6,7 +6,7 @@ An image database maker coupled with a randomizer for classification
 > 
 > The main functionalities are implemented.
 > 
-> No securities in many cases, which can lead the program to crash.
+> No securities in many cases, which can lead the program to crash. -> Work in progress!
 > 
 > Lot of assumptions as well, see below
 
@@ -16,7 +16,7 @@ The folder arborescence is critical, the database maker assumes you have multipl
 
 Image format: tif ONLY
 
-Image Dimension: ZXY or XY (TODO, ZCXY and CXY)
+Image Dimension: ZXY, XY, ZCXY and CXY
 
 NOT recursive (TODO, auto process the Split folder if such a folder is present, which can be a result of a ImageJ macro or Vesa's plugin)
 
